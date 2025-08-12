@@ -1,0 +1,24 @@
+actions:
+  - name: sendMessage
+    definition:
+      kind: synchronous
+      handler: YOUR_N8N_WEBHOOK_URL_HERE
+      forward_client_headers: true
+    permissions:
+      - role: user
+    comment: Send message to chatbot and get AI response
+custom_types:
+  input_objects:
+    - name: SendMessageInput
+      fields:
+        - name: chat_id
+          type: uuid!
+        - name: content
+          type: String!
+  objects:
+    - name: SendMessageOutput
+      fields:
+        - name: reply
+          type: String!
+  scalars: []
+  enums: []

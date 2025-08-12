@@ -1,0 +1,410 @@
+{
+  "name": "Hasura Chatbot Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hasura-chatbot",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-node",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "hasura-chatbot"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.input.chat_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "rightType": "any"
+              }
+            },
+            {
+              "leftValue": "={{ $json.input.content }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "rightType": "any"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.HASURA_GRAPHQL_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-hasura-admin-secret",
+              "value": "={{ $vars.HASURA_ADMIN_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "query": "query GetChat($chat_id: uuid!) { chats_by_pk(id: $chat_id) { id user_id title } }",
+          "variables": {
+            "chat_id": "={{ $json.input.chat_id }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "verify-chat-ownership",
+      "name": "Verify Chat Ownership",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.data.chats_by_pk }}",
+              "rightValue": null,
+              "operator": {
+                "type": "object",
+                "operation": "notEqual",
+                "singleValue": true
+              }
+            },
+            {
+              "leftValue": "={{ $json.data.chats_by_pk.user_id }}",
+              "rightValue": "={{ $('Webhook').item.json.session_variables['x-hasura-user-id'] }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-ownership",
+      "name": "Check Ownership",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 180]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.HASURA_GRAPHQL_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-hasura-admin-secret",
+              "value": "={{ $vars.HASURA_ADMIN_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "query": "query GetChatHistory($chat_id: uuid!) { messages(where: {chat_id: {_eq: $chat_id}}, order_by: {created_at: asc}, limit: 20) { role content created_at } }",
+          "variables": {
+            "chat_id": "={{ $('Webhook').item.json.input.chat_id }}"
+          }
+        }
+      },
+      "id": "get-chat-history",
+      "name": "Get Chat History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare messages for OpenRouter API\nconst messages = $input.all()[0].json.data.messages;\nconst userMessage = $('Webhook').item.json.input.content;\n\n// Convert to OpenRouter format\nconst openRouterMessages = [\n  {\n    role: 'system',\n    content: 'You are a helpful AI assistant. Provide clear, concise, and helpful responses to user questions.'\n  },\n  ...messages.map(msg => ({\n    role: msg.role === 'assistant' ? 'assistant' : 'user',\n    content: msg.content\n  })),\n  {\n    role: 'user',\n    content: userMessage\n  }\n];\n\nreturn [{\n  json: {\n    messages: openRouterMessages,\n    user_message: userMessage,\n    chat_id: $('Webhook').item.json.input.chat_id,\n    user_id: $('Webhook').item.json.session_variables['x-hasura-user-id']\n  }\n}];"
+      },
+      "id": "prepare-messages",
+      "name": "Prepare Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 80]
+    },
+    {
+      "parameters": {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $vars.OPENROUTER_API_KEY }}"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://your-app.com"
+            },
+            {
+              "name": "X-Title",
+              "value": "Nhost Chatbot"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "microsoft/phi-3-mini-128k-instruct:free",
+          "messages": "={{ $json.messages }}",
+          "max_tokens": 500,
+          "temperature": 0.7,
+          "stream": false
+        }
+      },
+      "id": "call-openrouter",
+      "name": "Call OpenRouter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1560, 80]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.HASURA_GRAPHQL_URL }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-hasura-admin-secret",
+              "value": "={{ $vars.HASURA_ADMIN_SECRET }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "query": "mutation InsertMessage($chat_id: uuid!, $user_id: uuid!, $role: String!, $content: String!) { insert_messages_one(object: {chat_id: $chat_id, user_id: $user_id, role: $role, content: $content}) { id } }",
+          "variables": {
+            "chat_id": "={{ $('Prepare Messages').item.json.chat_id }}",
+            "user_id": "={{ $('Prepare Messages').item.json.user_id }}",
+            "role": "assistant",
+            "content": "={{ $json.choices[0].message.content }}"
+          }
+        }
+      },
+      "id": "save-response",
+      "name": "Save Assistant Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1780, 80]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  \"reply\": $('Call OpenRouter').item.json.choices[0].message.content\n} }}"
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 80]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseStatusCode": 400,
+        "responseBody": "={{ {\n  \"error\": \"Invalid input: chat_id and content are required\"\n} }}"
+      },
+      "id": "invalid-input-response",
+      "name": "Invalid Input Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [460, 480]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseStatusCode": 403,
+        "responseBody": "={{ {\n  \"error\": \"Forbidden: You don't have access to this chat\"\n} }}"
+      },
+      "id": "forbidden-response",
+      "name": "Forbidden Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 380]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseStatusCode": 500,
+        "responseBody": "={{ {\n  \"error\": \"Internal server error\"\n} }}"
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 280]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Verify Chat Ownership",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Invalid Input Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Chat Ownership": {
+      "main": [
+        [
+          {
+            "node": "Check Ownership",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Ownership": {
+      "main": [
+        [
+          {
+            "node": "Get Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Forbidden Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Chat History": {
+      "main": [
+        [
+          {
+            "node": "Prepare Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Messages": {
+      "main": [
+        [
+          {
+            "node": "Call OpenRouter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call OpenRouter": {
+      "main": [
+        [
+          {
+            "node": "Save Assistant Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Assistant Response": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "variables": [
+    {
+      "key": "HASURA_GRAPHQL_URL",
+      "value": "https://your-subdomain.nhost.run/v1/graphql",
+      "type": "string"
+    },
+    {
+      "key": "HASURA_ADMIN_SECRET",
+      "value": "your-hasura-admin-secret",
+      "type": "string"
+    },
+    {
+      "key": "OPENROUTER_API_KEY",
+      "value": "your-openrouter-api-key",
+      "type": "string"
+    }
+  ],
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-15T10:30:00.000Z",
+  "versionId": "1"
+}
